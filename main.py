@@ -1,8 +1,10 @@
+import base64
+import json
 from fastapi import FastAPI, Query
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 from fastapi import Request
-from sqlmodel import SQLModel, create_engine, Session, func
+from sqlmodel import SQLModel, create_engine, Session
 from typing_extensions import Annotated
 from fastapi import Depends
 from contextlib import asynccontextmanager
@@ -17,7 +19,7 @@ T = TypeVar("T")
 
 
 class Campaign(SQLModel, table=True):
-    campaign_id: int | None = Field(default=None, primary_key=True)
+    campaign_id: int = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     due_date: datetime | None = Field(default=None, index=True)
     created_at: datetime = Field(
@@ -73,28 +75,6 @@ async def root():
     return {"message": "Hello World!"}
 
 
-data: Any = [
-    {
-        "campaign_id": 1,
-        "name": "Summer Launch",
-        "due_date": datetime.now(),
-        "created_at": datetime.now(),
-    },
-    {
-        "campaign_id": 2,
-        "name": "Cold Campaign",
-        "due_date": datetime.now(),
-        "created_at": datetime.now(),
-    },
-    {
-        "campaign_id": 3,
-        "name": "Diwali Campaign",
-        "due_date": datetime.now(),
-        "created_at": datetime.now(),
-    },
-]
-
-
 class Response(BaseModel, Generic[T]):
     data: T
 
@@ -102,32 +82,47 @@ class Response(BaseModel, Generic[T]):
 class PaginatedResponse(BaseModel, Generic[T]):
     data: T
     next: str | None
-    prev: str | None
+
+
+def encodeCursor(value: Any):
+    raw = json.dumps({"id": value})
+    return base64.b64encode(raw.encode()).decode()
+
+
+def decodeCursor(cursor: str):
+    raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+    payload = json.loads(raw)
+    return payload.get("id")
 
 
 @app.get("/campaigns", response_model=PaginatedResponse[list[Campaign]])
 async def read_campaigns(
     request: Request,
     session: SessionDep,
-    offset: int = Query(0, ge=0),
+    cursor: Optional[str] = Query(None),
     limit: int = Query(20, ge=1),
 ):
-    
+    cursor_id = decodeCursor(cursor) if cursor else 0
+
     data = session.exec(
-        select(Campaign).order_by(Campaign.campaign_id).offset(offset).limit(limit)
-    ).all()  # type is ignored
+        select(Campaign)
+        .order_by(Campaign.campaign_id)
+        .where(Campaign.campaign_id > cursor_id)
+        .limit(limit)
+    ).all()
+
     base_url = str(request.url).split("?")[0]
 
-    if offset > 0:
-        prev_url = f"{base_url}?offset={max(0, offset-limit)}&limit={limit}"
+    if len(data) > limit:
+        next_cursor = encodeCursor(data[:limit][-1].campaign_id)
+        next_url = f"{base_url}?cursor={next_cursor}&limit={limit}"
     else:
-        prev_url = None
+        next_url = None
 
-    next_url = f"{base_url}?offset={offset+limit}&limit={limit}"
-    
-    print(next_url, prev_url)
-
-    return {"data": data, "next": next_url, "prev": prev_url}
+    return {
+        "data": data[:limit],
+        "next": next_url,
+    }
 
 
 @app.get("/campaigns/{id}", response_model=Response[Campaign])
