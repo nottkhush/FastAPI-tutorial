@@ -109,20 +109,22 @@ class PaginatedResponse(BaseModel, Generic[T]):
 async def read_campaigns(
     request: Request,
     session: SessionDep,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1),
 ):
-    print(page)
-    limit = page_size
-    offset = (page - 1) * limit
+    
     data = session.exec(
         select(Campaign).order_by(Campaign.campaign_id).offset(offset).limit(limit)
     ).all()  # type is ignored
     base_url = str(request.url).split("?")[0]
 
+    if offset > 0:
+        prev_url = f"{base_url}?offset={max(0, offset-limit)}&limit={limit}"
+    else:
+        prev_url = None
 
-    next_url = f"{base_url}?page={page+1}&page_size={limit}"
-    prev_url = f"{base_url}?page={page-1}&page_size={limit}"
+    next_url = f"{base_url}?offset={offset+limit}&limit={limit}"
+    
     print(next_url, prev_url)
 
     return {"data": data, "next": next_url, "prev": prev_url}
